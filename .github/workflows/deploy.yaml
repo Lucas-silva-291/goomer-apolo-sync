@@ -15,6 +15,7 @@ jobs:
         host: ${{ matrix.pc.host }}
         username: ${{ matrix.pc.user }}
         key: ${{ secrets.SSH_KEY }}
+        debug: true
         script: |
           cd ${{ matrix.pc.path }}
           git pull origin main
