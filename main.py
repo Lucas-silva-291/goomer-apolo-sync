@@ -6,7 +6,7 @@ import time
 import os
 
 
-BASE = "http://10.10.42.100:8081"
+BASE = os.environ["GOOMER_BASE_URL"] 
 USER = "caixa"
 PWD  = "1234"
 
