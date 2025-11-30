@@ -11,8 +11,8 @@ USER = "caixa"
 PWD  = "1234"
 
 API_BASE = "https://api.apolocontrol.com"
-API_KEY = "goomer_prod_2025_xyz789"
-GOOMER_BRANCH = "0214"
+API_KEY = os.environ["APOLO_API_KEY"]  # nome que você quiser
+GOOMER_BRANCH = os.environ["GOOMER_BRANCH"]
 
 login_url  = f"{BASE}/api/v2/login"
 orders_url = f"{BASE}/api/v2/orders"
