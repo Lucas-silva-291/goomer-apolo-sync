@@ -30,14 +30,21 @@ def utc_to_brasilia(dt_utc):
     return dt_utc - timedelta(hours=3)
 
 def parse_iso_utc(ts):
-    # Aceita '2025-11-30T23:59:59Z' ou '2025-11-30T23:59:59+00:00'
+    # Aceita '2025-11-30T23:59:59Z', '2025-11-30T23:59:59.002Z'
+    # ou com offset '2025-11-30T23:59:59+00:00'
     ts = ts.replace("Z", "+00:00")
     if "+" in ts:
         base, _offset = ts.split("+", 1)
     else:
         base = ts
+
+    # Remove milissegundos se tiver (parte após o ponto)
+    if "." in base:
+        base = base.split(".", 1)[0]
+
     # Formato 'YYYY-MM-DDTHH:MM:SS'
     return datetime.strptime(base, "%Y-%m-%dT%H:%M:%S")
+
 
 def to_brasilia_time(utc_iso_str):
     dt_utc = parse_iso_utc(utc_iso_str)
