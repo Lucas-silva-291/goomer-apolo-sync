@@ -3,7 +3,7 @@ on: [push]
 
 jobs:
   deploy:
-    runs-on: [self-hosted, 0212-KDS02]
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
