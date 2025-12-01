@@ -1,29 +1,38 @@
 import requests
 import json
-from datetime import datetime
-from zoneinfo import ZoneInfo  # Python 3.9+
+from datetime import datetime, timedelta
 import time
 import os
 
+# ============================
+# CONFIG
+# ============================
 
-BASE = os.environ["GOOMER_BASE_URL"] 
+BASE = os.environ["GOOMER_BASE_URL"]
 USER = "caixa"
 PWD  = "1234"
 
 API_BASE = "https://api.apolocontrol.com"
-API_KEY = os.environ["APOLO_API_KEY"]  # nome que você quiser
+API_KEY = os.environ["APOLO_API_KEY"]
 GOOMER_BRANCH = os.environ["GOOMER_BRANCH"]
 
-login_url  = f"{BASE}/api/v2/login"
-orders_url = f"{BASE}/api/v2/orders"
-tables_url = f"{BASE}/api/v2/tables"
+# URLs (sem f-strings)
+login_url  = "{}/api/v2/login".format(BASE)
+orders_url = "{}/api/v2/orders".format(BASE)
+tables_url = "{}/api/v2/tables".format(BASE)
 
+# ============================
+# FUNÇÕES DE DATA/HORA
+# ============================
+
+# Ajuste simples: UTC -> Brasília (UTC-3)
+def utc_to_brasilia(dt_utc):
+    return dt_utc - timedelta(hours=3)
 
 def to_brasilia_time(utc_iso_str):
     dt_utc = datetime.fromisoformat(utc_iso_str.replace("Z", "+00:00"))
-    dt_brt = dt_utc.astimezone(ZoneInfo("America/Sao_Paulo"))
+    dt_brt = utc_to_brasilia(dt_utc)
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
-
 
 def pending_to_brasilia(pending_list):
     if not pending_list:
@@ -33,9 +42,12 @@ def pending_to_brasilia(pending_list):
         return None
     ts = val.split("_", 1)[0]
     dt_utc = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    dt_brt = dt_utc.astimezone(ZoneInfo("America/Sao_Paulo"))
+    dt_brt = utc_to_brasilia(dt_utc)
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
 
+# ============================
+# LOGIN E REQUISIÇÕES
+# ============================
 
 def login_session():
     s = requests.Session()
@@ -43,15 +55,15 @@ def login_session():
     headers = {
         "X-Requested-With": "XMLHttpRequest",
         "Origin": BASE,
-        "Referer": f"{BASE}/goomer/login",
+        "Referer": "{}/goomer/login".format(BASE),
     }
     r = s.post(login_url, headers=headers, verify=False)
     r.raise_for_status()
     return s, headers
 
-
 def calculate_last_hours():
-    now_brt = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    # Usa horário local do sistema como se fosse Brasília
+    now_brt = datetime.now()
     hora = now_brt.hour
 
     if 1 <= hora < 6:
@@ -60,15 +72,14 @@ def calculate_last_hours():
     if hora < 1:
         inicio = now_brt.replace(hour=0, minute=0, second=0, microsecond=0)
         delta = now_brt - inicio
-        return delta.total_seconds() / 3600
+        return delta.total_seconds() / 3600.0
 
     if 6 <= hora < 11:
         inicio = now_brt.replace(hour=6, minute=0, second=0, microsecond=0)
         delta = now_brt - inicio
-        return delta.total_seconds() / 3600
+        return delta.total_seconds() / 3600.0
 
     return 1
-
 
 def get_orders(s, headers, last_hours):
     params = {"last_hours": last_hours}
@@ -76,7 +87,6 @@ def get_orders(s, headers, last_hours):
     r.raise_for_status()
     data = r.json()
     return data["response"]["orders"]
-
 
 def get_cash_tabs(s, headers, last_hours):
     params = {"last_hours": last_hours}
@@ -86,7 +96,6 @@ def get_cash_tabs(s, headers, last_hours):
     tables = data["response"].get("tables", [])
     cash_codes = {t["code"] for t in tables}
     return cash_codes
-
 
 def simplify_orders(orders, cash_codes):
     simplified = []
@@ -120,6 +129,9 @@ def simplify_orders(orders, cash_codes):
         simplified.append(item)
     return simplified
 
+# ============================
+# ENVIO PARA API APOLO
+# ============================
 
 def send_to_api(pedidos):
     headers = {
@@ -133,8 +145,9 @@ def send_to_api(pedidos):
     }
 
     try:
+        url = "{}/api/goomer/pedidos".format(API_BASE)
         response = requests.post(
-            f"{API_BASE}/api/goomer/pedidos",
+            url,
             json=payload,
             headers=headers,
             timeout=30
@@ -147,20 +160,22 @@ def send_to_api(pedidos):
             result = response.json()
             saved = result.get("saved_new", 0)
             updated = result.get("updated_existing", 0)
-            print(f"✅ Envio OK! saved={saved}, updated={updated}")
+            print(u"Envio OK! saved={}, updated={}".format(saved, updated))
             return True
         else:
-            print(f"❌ Erro: {response.status_code} - {response.text}")
+            print(u"Erro: {} - {}".format(response.status_code, response.text))
             return False
 
     except Exception as e:
-        print(f"❌ Falha conexão: {e}")
+        print(u"Falha conexão: {}".format(e))
         return False
 
+# ============================
+# LOOP PRINCIPAL
+# ============================
 
 FAST_INTERVAL = 10
 REFRESH_INTERVAL = 30 * 60
-
 
 if __name__ == "__main__":
     session, headers = login_session()
@@ -174,7 +189,7 @@ if __name__ == "__main__":
         try:
             last_hours = calculate_last_hours()
             if last_hours > 0:
-                print(f"[FAST] Buscando pedidos dos últimos {last_hours:.2f} horas.")
+                print("[FAST] Buscando pedidos dos últimos %.2f horas." % last_hours)
                 orders = get_orders(session, headers, last_hours)
                 cash_codes = get_cash_tabs(session, headers, last_hours)
                 simplified_orders = simplify_orders(orders, cash_codes)

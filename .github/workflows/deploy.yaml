@@ -1,25 +1,13 @@
-name: Deploy Mini PCs (systemd)
+name: Deploy Mini PC Empresa (systemd)
 on: [push]
 
 jobs:
-  deploy-popos:
-    name: Deploy PopOS
-    runs-on: [self-hosted, pop-os]
+  deploy:
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-      - name: Deploy PopOS local
-        run: |
-          cd /usr/local/etc/goomer-apolo-sync
-          git pull origin main
-          pip install -r requirements.txt --quiet
-          sudo systemctl restart goomer
 
-  deploy-0212:
-    name: Deploy 0212-KDS02
-    runs-on: [self-hosted, 0212-KDS02]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Deploy 0212 local
+      - name: Deploy local
         run: |
           cd /usr/local/etc/goomer-apolo-sync
           git pull origin main
