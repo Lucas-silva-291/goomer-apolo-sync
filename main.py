@@ -10,14 +10,14 @@ import os
 
 BASE = os.environ["GOOMER_BASE_URL"]
 USER = "caixa"
-PWD  = "1234"
+PWD = "1234"
 
 API_BASE = "https://api.apolocontrol.com"
 API_KEY = os.environ["APOLO_API_KEY"]
 GOOMER_BRANCH = os.environ["GOOMER_BRANCH"]
 
-# URLs (sem f-strings)
-login_url  = "{}/api/v2/login".format(BASE)
+# URLs
+login_url = "{}/api/v2/login".format(BASE)
 orders_url = "{}/api/v2/orders".format(BASE)
 tables_url = "{}/api/v2/tables".format(BASE)
 
@@ -29,8 +29,18 @@ tables_url = "{}/api/v2/tables".format(BASE)
 def utc_to_brasilia(dt_utc):
     return dt_utc - timedelta(hours=3)
 
+def parse_iso_utc(ts):
+    # Aceita '2025-11-30T23:59:59Z' ou '2025-11-30T23:59:59+00:00'
+    ts = ts.replace("Z", "+00:00")
+    if "+" in ts:
+        base, _offset = ts.split("+", 1)
+    else:
+        base = ts
+    # Formato 'YYYY-MM-DDTHH:MM:SS'
+    return datetime.strptime(base, "%Y-%m-%dT%H:%M:%S")
+
 def to_brasilia_time(utc_iso_str):
-    dt_utc = datetime.fromisoformat(utc_iso_str.replace("Z", "+00:00"))
+    dt_utc = parse_iso_utc(utc_iso_str)
     dt_brt = utc_to_brasilia(dt_utc)
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -41,7 +51,7 @@ def pending_to_brasilia(pending_list):
     if val is None:
         return None
     ts = val.split("_", 1)[0]
-    dt_utc = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    dt_utc = parse_iso_utc(ts)
     dt_brt = utc_to_brasilia(dt_utc)
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
 
