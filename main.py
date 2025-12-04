@@ -3,11 +3,24 @@ import json
 from datetime import datetime, timedelta
 import time
 import os
+import logging
+
+# ============================
+# CONFIG LOGGING (REDUZ SPAM)
+# ============================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('/var/log/goomer-sync.log', mode='a')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # ============================
 # CONFIG
 # ============================
-
 BASE = os.environ["GOOMER_BASE_URL"]
 USER = "caixa"
 PWD = "1234"
@@ -24,22 +37,16 @@ tables_url = "{}/api/v2/tables".format(BASE)
 # ============================
 # FUNÇÕES DE DATA/HORA
 # ============================
-
-# Ajuste simples: UTC -> Brasília (UTC-3)
 def utc_to_brasilia(dt_utc):
     return dt_utc - timedelta(hours=3)
 
 def parse_iso_utc(ts):
-    # Remove sufixos Z e de fuso horário como +00:00
-    ts = ts.split("Z")[0]  # remove 'Z' e o que vem depois
-    ts = ts.split("+")[0]  # remove '+hh:mm' e o que vem depois
-    ts = ts.split("-")[0] if ts.count("-") > 2 else ts  # remove '-hh:mm' se houver mais que 2 hífens, considera parte do offset
-    # Remove milissegundos
+    ts = ts.split("Z")[0]
+    ts = ts.split("+")[0]
+    ts = ts.split("-")[0] if ts.count("-") > 2 else ts
     if "." in ts:
         ts = ts.split(".", 1)[0]
     return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
-
-
 
 def to_brasilia_time(utc_iso_str):
     dt_utc = parse_iso_utc(utc_iso_str)
@@ -58,8 +65,25 @@ def pending_to_brasilia(pending_list):
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
 
 # ============================
-# LOGIN E REQUISIÇÕES
+# LOGIN E REQUISIÇÕES COM RETRY
 # ============================
+def requests_with_retry(url, session=None, headers=None, params=None, max_retries=3):
+    """Requisição com retry e backoff exponencial"""
+    for tentativa in range(max_retries):
+        try:
+            if session:
+                r = session.get(url, headers=headers, params=params, verify=False, timeout=30)
+            else:
+                r = requests.get(url, headers=headers, params=params, verify=False, timeout=30)
+            r.raise_for_status()
+            return r
+        except Exception as e:
+            logger.warning(f"Tentativa {tentativa+1}/{max_retries} falhou: {e}")
+            if tentativa < max_retries - 1:
+                sleep_time = 2 ** tentativa + 1
+                logger.info(f"Aguardando {sleep_time}s antes de retry...")
+                time.sleep(sleep_time)
+    raise Exception(f"Falha após {max_retries} tentativas")
 
 def login_session():
     s = requests.Session()
@@ -69,12 +93,11 @@ def login_session():
         "Origin": BASE,
         "Referer": "{}/goomer/login".format(BASE),
     }
-    r = s.post(login_url, headers=headers, verify=False)
+    r = s.post(login_url, headers=headers, verify=False, timeout=30)
     r.raise_for_status()
     return s, headers
 
 def calculate_last_hours():
-    # Usa horário local do sistema como se fosse Brasília
     now_brt = datetime.now()
     hora = now_brt.hour
 
@@ -95,19 +118,16 @@ def calculate_last_hours():
 
 def get_orders(s, headers, last_hours):
     params = {"last_hours": last_hours}
-    r = s.get(orders_url, headers=headers, params=params, verify=False)
-    r.raise_for_status()
+    r = requests_with_retry(orders_url, s, headers, params)
     data = r.json()
     return data["response"]["orders"]
 
 def get_cash_tabs(s, headers, last_hours):
     params = {"last_hours": last_hours}
-    r = s.get(tables_url, headers=headers, params=params, verify=False)
-    r.raise_for_status()
+    r = requests_with_retry(tables_url, s, headers, params)
     data = r.json()
     tables = data["response"].get("tables", [])
-    cash_codes = {t["code"] for t in tables}
-    return cash_codes
+    return {t["code"] for t in tables}
 
 def simplify_orders(orders, cash_codes):
     simplified = []
@@ -116,7 +136,6 @@ def simplify_orders(orders, cash_codes):
             continue
 
         tab = o["products"][0]["tab"]
-
         created_utc = o["created_at"]
         created_brt = to_brasilia_time(created_utc)
 
@@ -142,9 +161,8 @@ def simplify_orders(orders, cash_codes):
     return simplified
 
 # ============================
-# ENVIO PARA API APOLO
+# ENVIO PARA API APOLO COM RETRY
 # ============================
-
 def send_to_api(pedidos):
     headers = {
         "X-API-Key": API_KEY,
@@ -156,62 +174,72 @@ def send_to_api(pedidos):
         "pedidos": pedidos
     }
 
-    try:
-        url = "{}/api/goomer/pedidos".format(API_BASE)
-        response = requests.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=30
-        )
+    url = "{}/api/goomer/pedidos".format(API_BASE)
+    
+    for tentativa in range(3):
+        try:
+            response = requests.post(
+                url, json=payload, headers=headers, timeout=30
+            )
+            
+            logger.info(f"STATUS: {response.status_code}")
+            logger.debug(f"BODY: {response.text}")
 
-        print("STATUS:", response.status_code)
-        print("BODY  :", response.text)
+            if response.status_code == 201:
+                result = response.json()
+                saved = result.get("saved_new", 0)
+                updated = result.get("updated_existing", 0)
+                logger.info(f"Envio OK! saved={saved}, updated={updated}")
+                return True
+            else:
+                logger.error(f"Erro HTTP {response.status_code}: {response.text}")
+                return False
 
-        if response.status_code == 201:
-            result = response.json()
-            saved = result.get("saved_new", 0)
-            updated = result.get("updated_existing", 0)
-            print(u"Envio OK! saved={}, updated={}".format(saved, updated))
-            return True
-        else:
-            print(u"Erro: {} - {}".format(response.status_code, response.text))
-            return False
-
-    except Exception as e:
-        print(u"Falha conexão: {}".format(e))
-        return False
+        except Exception as e:
+            logger.error(f"Tentativa {tentativa+1}/3 falhou: {e}")
+            if tentativa < 2:
+                time.sleep(2 ** tentativa + 1)
+    
+    logger.error("Falha após 3 tentativas na API Apolo")
+    return False
 
 # ============================
-# LOOP PRINCIPAL
+# LOOP PRINCIPAL MELHORADO
 # ============================
-
-FAST_INTERVAL = 10
-REFRESH_INTERVAL = 30 * 60
+FAST_INTERVAL = 10  # Mantido em 10s como pedido
+REFRESH_INTERVAL = 30 * 60  # 30 minutos
 
 if __name__ == "__main__":
+    logger.info("=== Iniciando Goomer-Apolo Sync ===")
     session, headers = login_session()
     last_refresh = 0
     last_fast_payload = None
     last_refresh_payload = None
+    ciclo_count = 0
+    erro_count = 0
+    MAX_ERROS_CONSECUTIVOS = 10
 
     while True:
+        ciclo_count += 1
         now = time.time()
 
         try:
             last_hours = calculate_last_hours()
             if last_hours > 0:
-                print("[FAST] Buscando pedidos dos últimos %.2f horas." % last_hours)
+                logger.debug(f"[FAST Ciclo {ciclo_count}] Buscando últimos {last_hours:.2f}h")
                 orders = get_orders(session, headers, last_hours)
                 cash_codes = get_cash_tabs(session, headers, last_hours)
                 simplified_orders = simplify_orders(orders, cash_codes)
 
                 if simplified_orders and simplified_orders != last_fast_payload:
+                    logger.info(f"NOVOS pedidos detectados ({len(simplified_orders)} itens)")
                     if send_to_api(simplified_orders):
                         last_fast_payload = simplified_orders
+                        logger.info("Payload FAST atualizado com sucesso")
 
+            # REFRESH a cada 30min
             if now - last_refresh >= REFRESH_INTERVAL:
-                print("[REFRESH] Atualizando status dos últimos 12h...")
+                logger.info("[REFRESH] Atualizando status dos últimos 12h...")
                 orders_big = get_orders(session, headers, last_hours=12)
                 cash_codes_big = get_cash_tabs(session, headers, last_hours=12)
                 simplified_big = simplify_orders(orders_big, cash_codes_big)
@@ -219,10 +247,26 @@ if __name__ == "__main__":
                 if simplified_big and simplified_big != last_refresh_payload:
                     if send_to_api(simplified_big):
                         last_refresh_payload = simplified_big
+                        logger.info("Payload REFRESH atualizado")
 
                 last_refresh = now
 
-        except Exception as e:
-            print("Erro no ciclo:", e)
+            erro_count = 0  # Reset contador de erros
 
-        time.sleep(FAST_INTERVAL)
+        except Exception as e:
+            erro_count += 1
+            logger.error(f"Erro no ciclo {ciclo_count}: {e}")
+            
+            # Backoff agressivo após múltiplos erros
+            if erro_count >= MAX_ERROS_CONSECUTIVOS:
+                sleep_extra = 300  # 5min extra
+                logger.warning(f"{MAX_ERROS_CONSECUTIVOS} erros consecutivos. Aguardando {sleep_extra}s")
+            else:
+                sleep_extra = 0
+
+        # Sleep principal (10s) + backoff extra se necessário
+        sleep_time = FAST_INTERVAL + sleep_extra
+        logger.debug(f"Aguardando {sleep_time}s até próximo ciclo")
+        time.sleep(sleep_time)
+
+    logger.info("=== Goomer-Apolo Sync finalizado ===")
