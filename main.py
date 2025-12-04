@@ -204,10 +204,10 @@ def send_to_api(pedidos):
     return False
 
 # ============================
-# LOOP PRINCIPAL MELHORADO
+# LOOP PRINCIPAL CORRIGIDO
 # ============================
-FAST_INTERVAL = 10  # Mantido em 10s como pedido
-REFRESH_INTERVAL = 30 * 60  # 30 minutos
+FAST_INTERVAL = 10
+REFRESH_INTERVAL = 30 * 60
 
 if __name__ == "__main__":
     logger.info("=== Iniciando Goomer-Apolo Sync ===")
@@ -218,10 +218,12 @@ if __name__ == "__main__":
     ciclo_count = 0
     erro_count = 0
     MAX_ERROS_CONSECUTIVOS = 10
+    sleep_extra = 0  # ✅ ADICIONADO AQUI
 
     while True:
         ciclo_count += 1
         now = time.time()
+        sleep_extra = 0  # ✅ RESET TODO CICLO
 
         try:
             last_hours = calculate_last_hours()
@@ -251,22 +253,18 @@ if __name__ == "__main__":
 
                 last_refresh = now
 
-            erro_count = 0  # Reset contador de erros
+            erro_count = 0
 
         except Exception as e:
             erro_count += 1
             logger.error(f"Erro no ciclo {ciclo_count}: {e}")
             
-            # Backoff agressivo após múltiplos erros
             if erro_count >= MAX_ERROS_CONSECUTIVOS:
                 sleep_extra = 300  # 5min extra
                 logger.warning(f"{MAX_ERROS_CONSECUTIVOS} erros consecutivos. Aguardando {sleep_extra}s")
-            else:
-                sleep_extra = 0
-
-        # Sleep principal (10s) + backoff extra se necessário
+        
+        # Sleep principal ✅ AGORA FUNCIONA
         sleep_time = FAST_INTERVAL + sleep_extra
         logger.debug(f"Aguardando {sleep_time}s até próximo ciclo")
         time.sleep(sleep_time)
 
-    logger.info("=== Goomer-Apolo Sync finalizado ===")
