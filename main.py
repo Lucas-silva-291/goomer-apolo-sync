@@ -23,9 +23,12 @@ logger = logging.getLogger(__name__)
 # ============================
 BASE = os.environ["GOOMER_BASE_URL"]
 
-# Credenciais múltiplas (prioridade da primeira que funcionar)
-GOOMER_USERS = os.environ.get("GOOMER_USERS", "caixa:senha").split(",")
-CREDENTIALS = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS]
+# Listas de credenciais (ORDERS e TABLES) vindas de env
+GOOMER_USERS_ORDERS = os.environ.get("GOOMER_USERS_ORDERS", "caixa:senha_orders").split(",")
+GOOMER_USERS_TABLES = os.environ.get("GOOMER_USERS_TABLES", "Operador:senha_tables").split(",")
+
+CRED_ORDERS = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS_ORDERS]
+CRED_TABLES = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS_TABLES]
 
 API_BASE = "https://api.apolocontrol.com"
 API_KEY = os.environ["APOLO_API_KEY"]
@@ -66,12 +69,12 @@ def pending_to_brasilia(pending_list):
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
 
 # ============================
-# LOGIN / SELEÇÃO DE CREDENCIAL
+# SELEÇÃO DE CREDENCIAL POR ENDPOINT
 # ============================
-def select_credential():
+def select_credential_for(url, cred_list, desc):
     """
-    Testa cada credencial diretamente na API /orders (igual ao curl que funcionou).
-    Retorna (user, pwd) que deu HTTP 200.
+    Testa credenciais para um endpoint específico (orders ou tables).
+    Retorna (user, pwd, headers) da primeira que funcionar (HTTP 200).
     """
     headers = {
         "X-Requested-With": "XMLHttpRequest",
@@ -79,14 +82,13 @@ def select_credential():
         "Referer": f"{BASE}/goomer/login",
         "Accept": "application/json",
     }
-
-    for cred in CREDENTIALS:
+    for cred in cred_list:
         user = cred["user"]
         pwd = cred["pwd"]
         try:
-            logger.info(f"Testando credencial na API /orders: {user}")
+            logger.info(f"Testando credencial para {desc}: {user}")
             r = requests.get(
-                orders_url,
+                url,
                 params={"last_hours": 0.5},
                 auth=(user, pwd),
                 headers=headers,
@@ -94,18 +96,16 @@ def select_credential():
                 timeout=15
             )
             r.raise_for_status()
-            logger.info(f"✅ API autorizou usuário: {user}")
+            logger.info(f"✅ API autorizou {desc} com usuário: {user}")
             return user, pwd, headers
         except Exception as e:
-            logger.warning(f"❌ API rejeitou {user}: {e}")
-
-    raise Exception("❌ Nenhuma credencial funcionou na API /orders!")
+            logger.warning(f"❌ API rejeitou {desc} com {user}: {e}")
+    raise Exception(f"❌ Nenhuma credencial funcionou para {desc}!")
 
 # ============================
 # REQUISIÇÕES COM RETRY
 # ============================
 def requests_with_retry(method, url, user, pwd, headers=None, params=None, max_retries=3):
-    """Requisição (GET) com retry e backoff exponencial, usando Basic Auth."""
     for tentativa in range(max_retries):
         try:
             r = requests.request(
@@ -247,8 +247,9 @@ REFRESH_INTERVAL = 30 * 60
 if __name__ == "__main__":
     logger.info("=== Iniciando Goomer-Apolo Sync ===")
 
-    # Seleciona usuário/senha que funcionam na API /orders
-    user, pwd, base_headers = select_credential()
+    # Seleciona credenciais separadas para ORDERS e TABLES
+    user_orders, pwd_orders, headers_orders = select_credential_for(orders_url, CRED_ORDERS, "ORDERS")
+    user_tables, pwd_tables, headers_tables = select_credential_for(tables_url, CRED_TABLES, "TABLES")
 
     last_refresh = 0
     last_fast_payload = None
@@ -267,8 +268,8 @@ if __name__ == "__main__":
             last_hours = calculate_last_hours()
             if last_hours > 0:
                 logger.debug(f"[FAST Ciclo {ciclo_count}] Buscando últimos {last_hours:.2f}h")
-                orders = get_orders(user, pwd, base_headers, last_hours)
-                cash_codes = get_cash_tabs(user, pwd, base_headers, last_hours)
+                orders = get_orders(user_orders, pwd_orders, headers_orders, last_hours)
+                cash_codes = get_cash_tabs(user_tables, pwd_tables, headers_tables, last_hours)
                 simplified_orders = simplify_orders(orders, cash_codes)
 
                 if simplified_orders and simplified_orders != last_fast_payload:
@@ -277,11 +278,10 @@ if __name__ == "__main__":
                         last_fast_payload = simplified_orders
                         logger.info("Payload FAST atualizado com sucesso")
 
-            # REFRESH a cada 30min
             if now - last_refresh >= REFRESH_INTERVAL:
                 logger.info("[REFRESH] Atualizando status dos últimos 12h...")
-                orders_big = get_orders(user, pwd, base_headers, last_hours=12)
-                cash_codes_big = get_cash_tabs(user, pwd, base_headers, last_hours=12)
+                orders_big = get_orders(user_orders, pwd_orders, headers_orders, last_hours=12)
+                cash_codes_big = get_cash_tabs(user_tables, pwd_tables, headers_tables, last_hours=12)
                 simplified_big = simplify_orders(orders_big, cash_codes_big)
 
                 if simplified_big and simplified_big != last_refresh_payload:
