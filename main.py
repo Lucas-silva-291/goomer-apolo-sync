@@ -40,7 +40,7 @@ API_KEY = os.environ["APOLO_API_KEY"]
 GOOMER_BRANCH = os.environ["GOOMER_BRANCH"]
 
 
-# URLs - CORRIGIDO PARA PYTHON 3.5
+# URLs - SEM f-STRINGS
 orders_url = BASE + "/api/v2/orders"
 tables_url = BASE + "/api/v2/tables"
 
@@ -90,14 +90,14 @@ def select_credential_for(url, cred_list, desc):
     headers = {
         "X-Requested-With": "XMLHttpRequest",
         "Origin": BASE,
-        "Referer": BASE + "/goomer/login",  # CORRIGIDO
+        "Referer": BASE + "/goomer/login",
         "Accept": "application/json",
     }
     for cred in cred_list:
         user = cred["user"]
         pwd = cred["pwd"]
         try:
-            logger.info(f"Testando credencial para {desc}: {user}")
+            logger.info("Testando credencial para " + desc + ": " + user)  # SEM f-STRING
             r = requests.get(
                 url,
                 params={"last_hours": 0.5},
@@ -107,11 +107,11 @@ def select_credential_for(url, cred_list, desc):
                 timeout=15
             )
             r.raise_for_status()
-            logger.info(f"✅ API autorizou {desc} com usuário: {user}")
+            logger.info("✅ API autorizou " + desc + " com usuário: " + user)  # SEM f-STRING
             return user, pwd, headers
         except Exception as e:
-            logger.warning(f"❌ API rejeitou {desc} com {user}: {e}")
-    raise Exception(f"❌ Nenhuma credencial funcionou para {desc}!")
+            logger.warning("❌ API rejeitou " + desc + " com " + user + ": " + str(e))  # SEM f-STRING
+    raise Exception("❌ Nenhuma credencial funcionou para " + desc + "!")
 
 
 # ============================
@@ -132,12 +132,12 @@ def requests_with_retry(method, url, user, pwd, headers=None, params=None, max_r
             r.raise_for_status()
             return r
         except Exception as e:
-            logger.warning(f"Tentativa {tentativa+1}/{max_retries} falhou: {e}")
+            logger.warning("Tentativa " + str(tentativa+1) + "/" + str(max_retries) + " falhou: " + str(e))  # SEM f-STRING
             if tentativa < max_retries - 1:
                 sleep_time = 2 ** tentativa + 1
-                logger.info(f"Aguardando {sleep_time}s antes de retry...")
+                logger.info("Aguardando " + str(sleep_time) + "s antes de retry...")  # SEM f-STRING
                 time.sleep(sleep_time)
-    raise Exception(f"Falha após {max_retries} tentativas")
+    raise Exception("Falha após " + str(max_retries) + " tentativas")
 
 
 # ============================
@@ -226,7 +226,7 @@ def send_to_api(pedidos):
         "pedidos": pedidos
     }
 
-    url = API_BASE + "/api/goomer/pedidos"  # CORRIGIDO
+    url = API_BASE + "/api/goomer/pedidos"
 
     for tentativa in range(3):
         try:
@@ -234,21 +234,21 @@ def send_to_api(pedidos):
                 url, json=payload, headers=headers, timeout=30
             )
 
-            logger.info(f"STATUS: {response.status_code}")
-            logger.debug(f"BODY: {response.text}")
+            logger.info("STATUS: " + str(response.status_code))
+            logger.debug("BODY: " + response.text)
 
             if response.status_code == 201:
                 result = response.json()
                 saved = result.get("saved_new", 0)
                 updated = result.get("updated_existing", 0)
-                logger.info(f"Envio OK! saved={saved}, updated={updated}")
+                logger.info("Envio OK! saved=" + str(saved) + ", updated=" + str(updated))
                 return True
             else:
-                logger.error(f"Erro HTTP {response.status_code}: {response.text}")
+                logger.error("Erro HTTP " + str(response.status_code) + ": " + response.text)
                 return False
 
         except Exception as e:
-            logger.error(f"Tentativa {tentativa+1}/3 falhou: {e}")
+            logger.error("Tentativa " + str(tentativa+1) + "/3 falhou: " + str(e))
             if tentativa < 2:
                 time.sleep(2 ** tentativa + 1)
 
@@ -286,21 +286,21 @@ if __name__ == "__main__":
         try:
             last_hours = calculate_last_hours()
             if last_hours > 0:
-                logger.debug(f"[FAST Ciclo {ciclo_count}] Buscando últimos {last_hours:.2f}h")
+                logger.debug("[FAST Ciclo " + str(ciclo_count) + "] Buscando últimos " + str(last_hours) + "h")
                 orders = get_orders(user_orders, pwd_orders, headers_orders, last_hours)
                 cash_codes = get_cash_tabs(user_tables, pwd_tables, headers_tables, last_hours)
                 simplified_orders = simplify_orders(orders, cash_codes)
 
                 if simplified_orders and simplified_orders != last_fast_payload:
-                    logger.info(f"NOVOS pedidos detectados ({len(simplified_orders)} itens)")
+                    logger.info("NOVOS pedidos detectados (" + str(len(simplified_orders)) + " itens)")
                     if send_to_api(simplified_orders):
                         last_fast_payload = simplified_orders
                         logger.info("Payload FAST atualizado com sucesso")
 
             if now - last_refresh >= REFRESH_INTERVAL:
                 logger.info("[REFRESH] Atualizando status dos últimos 12h...")
-                orders_big = get_orders(user_orders, pwd_orders, headers_orders, last_hours=12)
-                cash_codes_big = get_cash_tabs(user_tables, pwd_tables, headers_tables, last_hours=12)
+                orders_big = get_orders(user_orders, pwd_orders, headers_orders, 12)
+                cash_codes_big = get_cash_tabs(user_tables, pwd_tables, headers_tables, 12)
                 simplified_big = simplify_orders(orders_big, cash_codes_big)
 
                 if simplified_big and simplified_big != last_refresh_payload:
@@ -314,12 +314,12 @@ if __name__ == "__main__":
 
         except Exception as e:
             erro_count += 1
-            logger.error(f"Erro no ciclo {ciclo_count}: {e}")
+            logger.error("Erro no ciclo " + str(ciclo_count) + ": " + str(e))
 
             if erro_count >= MAX_ERROS_CONSECUTIVOS:
                 sleep_extra = 300
-                logger.warning(f"{MAX_ERROS_CONSECUTIVOS} erros consecutivos. Aguardando {sleep_extra}s")
+                logger.warning(str(MAX_ERROS_CONSECUTIVOS) + " erros consecutivos. Aguardando " + str(sleep_extra) + "s")
 
         sleep_time = FAST_INTERVAL + sleep_extra
-        logger.debug(f"Aguardando {sleep_time}s até próximo ciclo")
+        logger.debug("Aguardando " + str(sleep_time) + "s até próximo ciclo")
         time.sleep(sleep_time)
