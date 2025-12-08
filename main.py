@@ -22,8 +22,13 @@ logger = logging.getLogger(__name__)
 # CONFIG
 # ============================
 BASE = os.environ["GOOMER_BASE_URL"]
-USER = "caixa"
-PWD = "1234"
+# Credenciais múltiplas (prioridade da primeira que funcionar)
+CREDENTIALS = [
+    {"user": "caixa", "pwd": "1234"},
+    {"user": "Operador", "pwd": "1234"},  # Adicione senha real
+    {"user": "OPERADOR", "pwd": "1234"},  # Variações maiúscula/minúscula
+    # Adicione mais: {"user": "outro", "pwd": "senha"}
+]
 
 API_BASE = "https://api.apolocontrol.com"
 API_KEY = os.environ["APOLO_API_KEY"]
@@ -87,15 +92,25 @@ def requests_with_retry(url, session=None, headers=None, params=None, max_retrie
 
 def login_session():
     s = requests.Session()
-    s.auth = (USER, PWD)
     headers = {
         "X-Requested-With": "XMLHttpRequest",
         "Origin": BASE,
         "Referer": "{}/goomer/login".format(BASE),
     }
-    r = s.post(login_url, headers=headers, verify=False, timeout=30)
-    r.raise_for_status()
-    return s, headers
+    
+    for cred in CREDENTIALS:
+        try:
+            logger.info(f"Tentando login com usuário: {cred['user']}")
+            s.auth = (cred['user'], cred['pwd'])
+            r = s.post(login_url, headers=headers, verify=False, timeout=30)
+            r.raise_for_status()
+            logger.info(f"✅ Login OK com {cred['user']}")
+            return s, headers
+        except Exception as e:
+            logger.warning(f"❌ Falha login {cred['user']}: {e}")
+            s.auth = None  # Limpa auth falha
+    
+    raise Exception("❌ Todas credenciais falharam!")
 
 def calculate_last_hours():
     now_brt = datetime.now()
