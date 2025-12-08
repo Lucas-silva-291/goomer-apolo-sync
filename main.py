@@ -23,12 +23,9 @@ logger = logging.getLogger(__name__)
 # ============================
 BASE = os.environ["GOOMER_BASE_URL"]
 # Credenciais múltiplas (prioridade da primeira que funcionar)
-CREDENTIALS = [
-    {"user": "caixa", "pwd": "1234"},
-    {"user": "Operador", "pwd": "1234"},  # Adicione senha real
-    {"user": "OPERADOR", "pwd": "1234"},  # Variações maiúscula/minúscula
-    # Adicione mais: {"user": "outro", "pwd": "senha"}
-]
+GOOMER_USERS = os.environ.get("GOOMER_USERS", "caixa:1234").split(",")
+
+CREDENTIALS = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS]
 
 API_BASE = "https://api.apolocontrol.com"
 API_KEY = os.environ["APOLO_API_KEY"]
