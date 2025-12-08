@@ -5,6 +5,7 @@ import time
 import os
 import logging
 
+
 # ============================
 # CONFIG LOGGING (REDUZ SPAM)
 # ============================
@@ -18,31 +19,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 # ============================
 # CONFIG
 # ============================
 BASE = os.environ["GOOMER_BASE_URL"]
 
+
 # Listas de credenciais (ORDERS e TABLES) vindas de env
 GOOMER_USERS_ORDERS = os.environ.get("GOOMER_USERS_ORDERS", "caixa:senha_orders").split(",")
 GOOMER_USERS_TABLES = os.environ.get("GOOMER_USERS_TABLES", "Operador:senha_tables").split(",")
 
+
 CRED_ORDERS = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS_ORDERS]
 CRED_TABLES = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS_TABLES]
+
 
 API_BASE = "https://api.apolocontrol.com"
 API_KEY = os.environ["APOLO_API_KEY"]
 GOOMER_BRANCH = os.environ["GOOMER_BRANCH"]
 
-# URLs
-orders_url = f"{BASE}/api/v2/orders"
-tables_url = f"{BASE}/api/v2/tables"
+
+# URLs - CORRIGIDO PARA PYTHON 3.5
+orders_url = BASE + "/api/v2/orders"
+tables_url = BASE + "/api/v2/tables"
+
 
 # ============================
 # FUNÇÕES DE DATA/HORA
 # ============================
 def utc_to_brasilia(dt_utc):
     return dt_utc - timedelta(hours=3)
+
 
 def parse_iso_utc(ts):
     ts = ts.split("Z")[0]
@@ -52,10 +60,12 @@ def parse_iso_utc(ts):
         ts = ts.split(".", 1)[0]
     return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
 
+
 def to_brasilia_time(utc_iso_str):
     dt_utc = parse_iso_utc(utc_iso_str)
     dt_brt = utc_to_brasilia(dt_utc)
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
+
 
 def pending_to_brasilia(pending_list):
     if not pending_list:
@@ -68,6 +78,7 @@ def pending_to_brasilia(pending_list):
     dt_brt = utc_to_brasilia(dt_utc)
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
 
+
 # ============================
 # SELEÇÃO DE CREDENCIAL POR ENDPOINT
 # ============================
@@ -79,7 +90,7 @@ def select_credential_for(url, cred_list, desc):
     headers = {
         "X-Requested-With": "XMLHttpRequest",
         "Origin": BASE,
-        "Referer": f"{BASE}/goomer/login",
+        "Referer": BASE + "/goomer/login",  # CORRIGIDO
         "Accept": "application/json",
     }
     for cred in cred_list:
@@ -101,6 +112,7 @@ def select_credential_for(url, cred_list, desc):
         except Exception as e:
             logger.warning(f"❌ API rejeitou {desc} com {user}: {e}")
     raise Exception(f"❌ Nenhuma credencial funcionou para {desc}!")
+
 
 # ============================
 # REQUISIÇÕES COM RETRY
@@ -127,6 +139,7 @@ def requests_with_retry(method, url, user, pwd, headers=None, params=None, max_r
                 time.sleep(sleep_time)
     raise Exception(f"Falha após {max_retries} tentativas")
 
+
 # ============================
 # CÁLCULO DE JANELA DE BUSCA
 # ============================
@@ -149,6 +162,7 @@ def calculate_last_hours():
 
     return 1
 
+
 # ============================
 # BUSCAS NO GOOMER
 # ============================
@@ -158,12 +172,14 @@ def get_orders(user, pwd, headers, last_hours):
     data = r.json()
     return data["response"]["orders"]
 
+
 def get_cash_tabs(user, pwd, headers, last_hours):
     params = {"last_hours": last_hours}
     r = requests_with_retry("GET", tables_url, user, pwd, headers, params)
     data = r.json()
     tables = data["response"].get("tables", [])
     return {t["code"] for t in tables}
+
 
 def simplify_orders(orders, cash_codes):
     simplified = []
@@ -195,6 +211,7 @@ def simplify_orders(orders, cash_codes):
         simplified.append(item)
     return simplified
 
+
 # ============================
 # ENVIO PARA API APOLO COM RETRY
 # ============================
@@ -209,7 +226,7 @@ def send_to_api(pedidos):
         "pedidos": pedidos
     }
 
-    url = f"{API_BASE}/api/goomer/pedidos"
+    url = API_BASE + "/api/goomer/pedidos"  # CORRIGIDO
 
     for tentativa in range(3):
         try:
@@ -238,11 +255,13 @@ def send_to_api(pedidos):
     logger.error("Falha após 3 tentativas na API Apolo")
     return False
 
+
 # ============================
 # LOOP PRINCIPAL
 # ============================
 FAST_INTERVAL = 10
 REFRESH_INTERVAL = 30 * 60
+
 
 if __name__ == "__main__":
     logger.info("=== Iniciando Goomer-Apolo Sync ===")
