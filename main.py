@@ -41,16 +41,21 @@ def get_goomer_ip_same_net_d100():
         s.close()
 
     octetos = src_ip.split(".")
-    goomer_ip = f"{octetos[0]}.{octetos[1]}.{octetos[2]}.100"
+    goomer_ip = (
+        octetos[0] + "." +
+        octetos[1] + "." +
+        octetos[2] + ".100"
+    )
     return goomer_ip
 
 GOOMER_IP = get_goomer_ip_same_net_d100()
 GOOMER_PORT = 8081
-BASE = f"http://{GOOMER_IP}:{GOOMER_PORT}"
+BASE = "http://" + GOOMER_IP + ":" + str(GOOMER_PORT)
 
 LOGIN_URL = BASE + "/api/v2/login"
 ORDERS_URL = BASE + "/api/v2/orders"
 TABLES_URL = BASE + "/api/v2/tables"
+
 
 # ============================
 # CONFIG APOLO
