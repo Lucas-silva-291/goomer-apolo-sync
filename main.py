@@ -5,6 +5,7 @@ import time
 import os
 import logging
 import socket
+import base64
 from urllib3.exceptions import InsecureRequestWarning
 
 # desabilita warning de verify=False
@@ -39,7 +40,7 @@ LOCAL_IP = get_local_ip()
 LOCAL_BASE = "http://" + LOCAL_IP + ":8081"
 
 # BASE do Goomer: usa env se tiver, senão cai na LOCAL_BASE
-BASE = os.environ.get("GOOMER_BASE_URL", LOCAL_BASE)
+BASE = LOCAL_BASE
 
 LOGIN_URL = BASE + "/api/v2/login"
 ORDERS_URL = BASE + "/api/v2/orders"
@@ -65,7 +66,7 @@ SESSION = requests.Session()
 
 def goomer_login():
     """
-    Faz um POST em /api/v2/login com Basic Auth (GOOMER_USER/GOOMER_PASS)
+    Faz POST em /api/v2/login com Basic Auth (GOOMER_USER/GOOMER_PASS)
     e guarda cookies na SESSION global.
     """
     logger.info(
@@ -121,7 +122,7 @@ def pending_to_brasilia(pending_list):
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
 
 # ============================
-# REQUISIÇÕES COM RETRY (SESSION + AUTH)
+# REQUISIÇÕES COM RETRY (SESSION)
 # ============================
 def session_request_with_retry(method, url, headers=None, params=None, max_retries=3):
     for tentativa in range(max_retries):
@@ -131,7 +132,6 @@ def session_request_with_retry(method, url, headers=None, params=None, max_retri
                 url,
                 headers=headers,
                 params=params,
-                auth=(GOOMER_USER, GOOMER_PASS),
                 verify=False,
                 timeout=30
             )
@@ -192,13 +192,32 @@ def get_orders(last_hours):
 
 def get_cash_tabs(last_hours):
     params = {"last_hours": last_hours}
+
+    # Authorization: Basic <base64(user:pass)> igual ao curl
+    token = base64.b64encode(
+        f"{GOOMER_USER}:{GOOMER_PASS}".encode()
+    ).decode()
+
     headers = {
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json",
         "Origin": BASE,
         "Referer": BASE + "/goomer/login",
+        "Authorization": "Basic " + token,
     }
-    r = session_request_with_retry("GET", TABLES_URL, headers=headers, params=params)
+
+    r = SESSION.get(
+        TABLES_URL,
+        headers=headers,
+        params=params,
+        verify=False,
+        timeout=30,
+    )
+    # se ainda der 401 aqui, loga e sobe
+    if r.status_code == 401:
+        logger.error("401 em /tables mesmo com Authorization Basic; body=" + r.text)
+    r.raise_for_status()
+
     data = r.json()
     tables = data["response"].get("tables", [])
     return {t["code"] for t in tables}
@@ -283,7 +302,7 @@ FAST_INTERVAL = 10
 REFRESH_INTERVAL = 30 * 60
 
 if __name__ == "__main__":
-    logger.info("=== Iniciando Goomer-Apolo Sync (sessão + Basic Auth) ===")
+    logger.info("=== Iniciando Goomer-Apolo Sync (sessão + Basic em /tables) ===")
     logger.info("IP local detectado: " + LOCAL_IP)
     logger.info("BASE em uso: " + BASE)
     logger.info("ORDERS_URL: " + ORDERS_URL)
