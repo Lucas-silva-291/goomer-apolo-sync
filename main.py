@@ -56,7 +56,6 @@ LOGIN_URL = BASE + "/api/v2/login"
 ORDERS_URL = BASE + "/api/v2/orders"
 TABLES_URL = BASE + "/api/v2/tables"
 
-
 # ============================
 # CONFIG APOLO
 # ============================
@@ -204,10 +203,9 @@ def get_orders(last_hours):
 def get_cash_tabs(last_hours):
     params = {"last_hours": last_hours}
 
-    # Authorization: Basic <base64(user:pass)> igual ao curl
-    token = base64.b64encode(
-        f"{GOOMER_USER}:{GOOMER_PASS}".encode()
-    ).decode()
+    # monta "user:pass" sem f-string
+    raw = (GOOMER_USER + ":" + GOOMER_PASS).encode()
+    token = base64.b64encode(raw).decode()
 
     headers = {
         "X-Requested-With": "XMLHttpRequest",
@@ -312,7 +310,7 @@ FAST_INTERVAL = 10
 REFRESH_INTERVAL = 30 * 60
 
 if __name__ == "__main__":
-    
+
     if not API_KEY or not GOOMER_BRANCH:
         raise Exception("APOLO_API_KEY ou GOOMER_BRANCH não definidos nas variáveis de ambiente")
 
