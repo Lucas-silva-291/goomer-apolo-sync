@@ -37,85 +37,53 @@ def get_local_ip():
 
 LOCAL_IP = get_local_ip()
 LOCAL_BASE = "http://" + LOCAL_IP + ":8081"
-USERS_URL = LOCAL_BASE + "/api/v2/users"
+
+# BASE do Goomer: usa env se tiver, senão cai na LOCAL_BASE
+BASE = os.environ.get("GOOMER_BASE_URL", LOCAL_BASE)
+
+LOGIN_URL = BASE + "/api/v2/login"
+ORDERS_URL = BASE + "/api/v2/orders"
+TABLES_URL = BASE + "/api/v2/tables"
 
 # ============================
-# CONFIG (API EXTERNA)
+# CONFIG APOLO
 # ============================
 API_BASE = "https://api.apolocontrol.com"
 API_KEY = os.environ["APOLO_API_KEY"]
 GOOMER_BRANCH = os.environ["GOOMER_BRANCH"]
 
-# BASE do Goomer: usa env se tiver, senão cai na LOCAL_BASE
-BASE = os.environ.get("GOOMER_BASE_URL", LOCAL_BASE)
-
-orders_url = BASE + "/api/v2/orders"
-tables_url = BASE + "/api/v2/tables"
-
 # ============================
-# BUSCAR USERS LOCALMENTE
+# SESSÃO AUTENTICADA NO GOOMER
 # ============================
-def load_creds_from_local_users():
+SESSION = requests.Session()
+
+def goomer_login():
     """
-    Busca /api/v2/users no Goomer local e monta listas de credenciais.
+    Faz um POST em /api/v2/login com Basic Auth (user/senha fixos ou de env)
+    e guarda cookies na SESSION global.
     """
-    users = []
-    try:
-        logger.info("Buscando usuários em " + USERS_URL)
-        headers = {
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": LOCAL_BASE + "/goomer/login",
-        }
-        r = requests.get(USERS_URL, headers=headers, verify=False, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        users = data.get("response", {}).get("users", [])
-    except Exception as e:
-        logger.error("Falha ao buscar usuários locais: " + str(e))
+    username = os.environ.get("GOOMER_USER", "caixa")
+    password = os.environ.get("GOOMER_PASS", "1234")
 
-    cred_orders = []
-    cred_tables = []
+    logger.info("Fazendo login no Goomer em " + LOGIN_URL + " com usuário " + username)
 
-    for u in users:
-        username = u.get("username")
-        password = u.get("password")
-        if not username or not password:
-            continue
+    headers = {
+        "Accept": "*/*",
+        "Origin": BASE,
+        "Referer": BASE + "/goomer/login",
+        "X-Requested-With": "XMLHttpRequest",
+    }
 
-        # regra simples: usa todos em ambos
-        cred_orders.append({"user": username, "pwd": password})
-        cred_tables.append({"user": username, "pwd": password})
-
-    if not cred_orders and not cred_tables:
-        # fallback para env se não achar nada
-        logger.warning("Nenhum usuário local carregado; usando variáveis de ambiente")
-        GOOMER_USERS_ORDERS = os.environ.get(
-            "GOOMER_USERS_ORDERS", "caixa:senha_orders"
-        ).split(",")
-        GOOMER_USERS_TABLES = os.environ.get(
-            "GOOMER_USERS_TABLES", "Operador:senha_tables"
-        ).split(",")
-
-        cred_orders = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS_ORDERS]
-        cred_tables = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS_TABLES]
-
-    return cred_orders, cred_tables
-
-# carrega usuários locais / env
-cred_orders, cred_tables = load_creds_from_local_users()
-
-# garante que ambos tenham algo, usando mesma lista se precisar
-if not cred_orders and not cred_tables:
-    raise Exception("Nenhuma credencial encontrada (nem local nem env)!")
-
-if not cred_orders:
-    cred_orders = cred_tables
-if not cred_tables:
-    cred_tables = cred_orders
-
-CRED_ORDERS = cred_orders
-CRED_TABLES = cred_tables
+    # Requests monta o header Authorization: Basic ... para nós
+    resp = SESSION.post(
+        LOGIN_URL,
+        headers=headers,
+        auth=(username, password),
+        verify=False,
+        timeout=10,
+    )
+    resp.raise_for_status()
+    logger.info("Login Goomer OK, status=" + str(resp.status_code))
 
 # ============================
 # FUNÇÕES DE DATA/HORA
@@ -148,60 +116,37 @@ def pending_to_brasilia(pending_list):
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
 
 # ============================
-# SELEÇÃO DE CREDENCIAL POR ENDPOINT
+# REQUISIÇÕES COM RETRY (USANDO SESSION)
 # ============================
-def select_credential_for(url, cred_list, desc):
-    headers = {
-        "X-Requested-With": "XMLHttpRequest",
-        "Origin": BASE,
-        "Referer": BASE + "/goomer/login",
-        "Accept": "application/json",
-    }
-    for cred in cred_list:
-        user = cred["user"]
-        pwd = cred["pwd"]
-        try:
-            logger.info("Testando credencial para " + desc + ": " + user)
-            r = requests.get(
-                url,
-                params={"last_hours": 0.5},
-                auth=(user, pwd),
-                headers=headers,
-                verify=False,
-                timeout=15
-            )
-            logger.info(desc + " status=" + str(r.status_code))
-            r.raise_for_status()
-            logger.info("API autorizou " + desc + " com usuário: " + user)
-            return user, pwd, headers
-        except Exception as e:
-            logger.warning("API rejeitou " + desc + " com " + user + ": " + str(e))
-    raise Exception("Nenhuma credencial funcionou para " + desc + "!")
-
-# ============================
-# REQUISIÇÕES COM RETRY
-# ============================
-def requests_with_retry(method, url, user, pwd, headers=None, params=None, max_retries=3):
+def session_request_with_retry(method, url, headers=None, params=None, max_retries=3):
     for tentativa in range(max_retries):
         try:
-            r = requests.request(
+            r = SESSION.request(
                 method,
                 url,
-                auth=(user, pwd),
                 headers=headers,
                 params=params,
                 verify=False,
                 timeout=30
             )
+            if r.status_code == 401 and tentativa == 0:
+                # tenta relogar uma vez se perdeu a sessão
+                logger.warning("401 recebido; refazendo login no Goomer")
+                goomer_login()
+                continue
+
             r.raise_for_status()
             return r
         except Exception as e:
-            logger.warning("Tentativa " + str(tentativa+1) + "/" + str(max_retries) + " falhou: " + str(e))
+            logger.warning(
+                "Tentativa " + str(tentativa + 1) + "/" + str(max_retries) +
+                " falhou em " + url + ": " + str(e)
+            )
             if tentativa < max_retries - 1:
                 sleep_time = 2 ** tentativa + 1
                 logger.info("Aguardando " + str(sleep_time) + "s antes de retry...")
                 time.sleep(sleep_time)
-    raise Exception("Falha após " + str(max_retries) + " tentativas")
+    raise Exception("Falha após " + str(max_retries) + " tentativas em " + url)
 
 # ============================
 # CÁLCULO DE JANELA DE BUSCA
@@ -226,17 +171,29 @@ def calculate_last_hours():
     return 1
 
 # ============================
-# BUSCAS NO GOOMER
+# BUSCAS NO GOOMER (ORDERS / TABLES)
 # ============================
-def get_orders(user, pwd, headers, last_hours):
+def get_orders(last_hours):
     params = {"last_hours": last_hours}
-    r = requests_with_retry("GET", orders_url, user, pwd, headers, params)
+    headers = {
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "application/json",
+        "Origin": BASE,
+        "Referer": BASE + "/goomer/login",
+    }
+    r = session_request_with_retry("GET", ORDERS_URL, headers=headers, params=params)
     data = r.json()
     return data["response"]["orders"]
 
-def get_cash_tabs(user, pwd, headers, last_hours):
+def get_cash_tabs(last_hours):
     params = {"last_hours": last_hours}
-    r = requests_with_retry("GET", tables_url, user, pwd, headers, params)
+    headers = {
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "application/json",
+        "Origin": BASE,
+        "Referer": BASE + "/goomer/login",
+    }
+    r = session_request_with_retry("GET", TABLES_URL, headers=headers, params=params)
     data = r.json()
     tables = data["response"].get("tables", [])
     return {t["code"] for t in tables}
@@ -321,12 +278,12 @@ FAST_INTERVAL = 10
 REFRESH_INTERVAL = 30 * 60
 
 if __name__ == "__main__":
-    logger.info("=== Iniciando Goomer-Apolo Sync ===")
+    logger.info("=== Iniciando Goomer-Apolo Sync (sessão única) ===")
     logger.info("IP local detectado: " + LOCAL_IP)
     logger.info("BASE em uso: " + BASE)
 
-    user_orders, pwd_orders, headers_orders = select_credential_for(orders_url, CRED_ORDERS, "ORDERS")
-    user_tables, pwd_tables, headers_tables = select_credential_for(tables_url, CRED_TABLES, "TABLES")
+    # login inicial
+    goomer_login()
 
     last_refresh = 0
     last_fast_payload = None
@@ -345,8 +302,8 @@ if __name__ == "__main__":
             last_hours = calculate_last_hours()
             if last_hours > 0:
                 logger.debug("[FAST Ciclo " + str(ciclo_count) + "] Buscando últimos " + str(last_hours) + "h")
-                orders = get_orders(user_orders, pwd_orders, headers_orders, last_hours)
-                cash_codes = get_cash_tabs(user_tables, pwd_tables, headers_tables, last_hours)
+                orders = get_orders(last_hours)
+                cash_codes = get_cash_tabs(last_hours)
                 simplified_orders = simplify_orders(orders, cash_codes)
 
                 if simplified_orders and simplified_orders != last_fast_payload:
@@ -357,8 +314,8 @@ if __name__ == "__main__":
 
             if now - last_refresh >= REFRESH_INTERVAL:
                 logger.info("[REFRESH] Atualizando status dos últimos 12h...")
-                orders_big = get_orders(user_orders, pwd_orders, headers_orders, 12)
-                cash_codes_big = get_cash_tabs(user_tables, pwd_tables, headers_tables, 12)
+                orders_big = get_orders(12)
+                cash_codes_big = get_cash_tabs(12)
                 simplified_big = simplify_orders(orders_big, cash_codes_big)
 
                 if simplified_big and simplified_big != last_refresh_payload:
