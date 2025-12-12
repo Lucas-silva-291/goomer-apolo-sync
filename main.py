@@ -4,10 +4,14 @@ from datetime import datetime, timedelta
 import time
 import os
 import logging
+import socket
+from urllib3.exceptions import InsecureRequestWarning
 
+# desabilita warning de verify=False
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
 # ============================
-# CONFIG LOGGING (REDUZ SPAM)
+# LOGGING
 # ============================
 logging.basicConfig(
     level=logging.INFO,
@@ -19,38 +23,98 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ============================
+# IP LOCAL + BASE LOCAL
+# ============================
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # não precisa estar acessível, é só pra descobrir a interface de saída
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    return ip
+
+LOCAL_IP = get_local_ip()
+LOCAL_BASE = "http://" + LOCAL_IP + ":8081"
+USERS_URL = LOCAL_BASE + "/api/v2/users"
 
 # ============================
-# CONFIG
+# CONFIG (API EXTERNA)
 # ============================
-BASE = os.environ["GOOMER_BASE_URL"]
-
-
-# Listas de credenciais (ORDERS e TABLES) vindas de env
-GOOMER_USERS_ORDERS = os.environ.get("GOOMER_USERS_ORDERS", "caixa:senha_orders").split(",")
-GOOMER_USERS_TABLES = os.environ.get("GOOMER_USERS_TABLES", "Operador:senha_tables").split(",")
-
-
-CRED_ORDERS = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS_ORDERS]
-CRED_TABLES = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS_TABLES]
-
-
 API_BASE = "https://api.apolocontrol.com"
 API_KEY = os.environ["APOLO_API_KEY"]
 GOOMER_BRANCH = os.environ["GOOMER_BRANCH"]
 
+# BASE do Goomer: usa env se tiver, senão cai na LOCAL_BASE
+BASE = os.environ.get("GOOMER_BASE_URL", LOCAL_BASE)
 
-# URLs - SEM f-STRINGS
 orders_url = BASE + "/api/v2/orders"
 tables_url = BASE + "/api/v2/tables"
 
+# ============================
+# BUSCAR USERS LOCALMENTE
+# ============================
+def load_creds_from_local_users():
+    """
+    Busca /api/v2/users no Goomer local e monta listas de credenciais
+    para ORDERS e TABLES com base em username/password.
+    """
+    try:
+        logger.info("Buscando usuários em " + USERS_URL)
+        headers = {
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": LOCAL_BASE + "/goomer/login",
+        }
+        r = requests.get(USERS_URL, headers=headers, verify=False, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        users = data["response"]["users"]
+    except Exception as e:
+        logger.error("Falha ao buscar usuários locais: " + str(e))
+        users = []
+
+    cred_orders = []
+    cred_tables = []
+
+    for u in users:
+        username = u.get("username")
+        password = u.get("password")
+        if not username or not password:
+            continue
+
+        # aqui você define a lógica de separação:
+        # exemplo: tudo vai pra ORDERS
+        cred_orders.append({"user": username, "pwd": password})
+        # se quiser, pode separar por tipo
+        # if u.get("type") == "Garcom":
+        #     cred_tables.append({"user": username, "pwd": password})
+
+    if not cred_orders:
+        # fallback para env se não achar nada
+        logger.warning("Nenhum usuário local carregado; usando variáveis de ambiente")
+        GOOMER_USERS_ORDERS = os.environ.get(
+            "GOOMER_USERS_ORDERS", "caixa:senha_orders"
+        ).split(",")
+        GOOMER_USERS_TABLES = os.environ.get(
+            "GOOMER_USERS_TABLES", "Operador:senha_tables"
+        ).split(",")
+
+        cred_orders = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS_ORDERS]
+        cred_tables = [{"user": u.split(":")[0], "pwd": u.split(":")[1]} for u in GOOMER_USERS_TABLES]
+
+    return cred_orders, cred_tables
+
+# carrega as credenciais na inicialização
+CRED_ORDERS, CRED_TABLES = load_creds_from_local_users()
 
 # ============================
 # FUNÇÕES DE DATA/HORA
 # ============================
 def utc_to_brasilia(dt_utc):
     return dt_utc - timedelta(hours=3)
-
 
 def parse_iso_utc(ts):
     ts = ts.split("Z")[0]
@@ -60,12 +124,10 @@ def parse_iso_utc(ts):
         ts = ts.split(".", 1)[0]
     return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
 
-
 def to_brasilia_time(utc_iso_str):
     dt_utc = parse_iso_utc(utc_iso_str)
     dt_brt = utc_to_brasilia(dt_utc)
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
-
 
 def pending_to_brasilia(pending_list):
     if not pending_list:
@@ -78,15 +140,10 @@ def pending_to_brasilia(pending_list):
     dt_brt = utc_to_brasilia(dt_utc)
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
 
-
 # ============================
 # SELEÇÃO DE CREDENCIAL POR ENDPOINT
 # ============================
 def select_credential_for(url, cred_list, desc):
-    """
-    Testa credenciais para um endpoint específico (orders ou tables).
-    Retorna (user, pwd, headers) da primeira que funcionar (HTTP 200).
-    """
     headers = {
         "X-Requested-With": "XMLHttpRequest",
         "Origin": BASE,
@@ -97,7 +154,7 @@ def select_credential_for(url, cred_list, desc):
         user = cred["user"]
         pwd = cred["pwd"]
         try:
-            logger.info("Testando credencial para " + desc + ": " + user)  # SEM f-STRING
+            logger.info("Testando credencial para " + desc + ": " + user)
             r = requests.get(
                 url,
                 params={"last_hours": 0.5},
@@ -107,12 +164,11 @@ def select_credential_for(url, cred_list, desc):
                 timeout=15
             )
             r.raise_for_status()
-            logger.info("✅ API autorizou " + desc + " com usuário: " + user)  # SEM f-STRING
+            logger.info("API autorizou " + desc + " com usuário: " + user)
             return user, pwd, headers
         except Exception as e:
-            logger.warning("❌ API rejeitou " + desc + " com " + user + ": " + str(e))  # SEM f-STRING
-    raise Exception("❌ Nenhuma credencial funcionou para " + desc + "!")
-
+            logger.warning("API rejeitou " + desc + " com " + user + ": " + str(e))
+    raise Exception("Nenhuma credencial funcionou para " + desc + "!")
 
 # ============================
 # REQUISIÇÕES COM RETRY
@@ -132,13 +188,12 @@ def requests_with_retry(method, url, user, pwd, headers=None, params=None, max_r
             r.raise_for_status()
             return r
         except Exception as e:
-            logger.warning("Tentativa " + str(tentativa+1) + "/" + str(max_retries) + " falhou: " + str(e))  # SEM f-STRING
+            logger.warning("Tentativa " + str(tentativa+1) + "/" + str(max_retries) + " falhou: " + str(e))
             if tentativa < max_retries - 1:
                 sleep_time = 2 ** tentativa + 1
-                logger.info("Aguardando " + str(sleep_time) + "s antes de retry...")  # SEM f-STRING
+                logger.info("Aguardando " + str(sleep_time) + "s antes de retry...")
                 time.sleep(sleep_time)
     raise Exception("Falha após " + str(max_retries) + " tentativas")
-
 
 # ============================
 # CÁLCULO DE JANELA DE BUSCA
@@ -162,7 +217,6 @@ def calculate_last_hours():
 
     return 1
 
-
 # ============================
 # BUSCAS NO GOOMER
 # ============================
@@ -172,14 +226,12 @@ def get_orders(user, pwd, headers, last_hours):
     data = r.json()
     return data["response"]["orders"]
 
-
 def get_cash_tabs(user, pwd, headers, last_hours):
     params = {"last_hours": last_hours}
     r = requests_with_retry("GET", tables_url, user, pwd, headers, params)
     data = r.json()
     tables = data["response"].get("tables", [])
     return {t["code"] for t in tables}
-
 
 def simplify_orders(orders, cash_codes):
     simplified = []
@@ -211,9 +263,8 @@ def simplify_orders(orders, cash_codes):
         simplified.append(item)
     return simplified
 
-
 # ============================
-# ENVIO PARA API APOLO COM RETRY
+# ENVIO PARA API APOLO
 # ============================
 def send_to_api(pedidos):
     headers = {
@@ -255,18 +306,17 @@ def send_to_api(pedidos):
     logger.error("Falha após 3 tentativas na API Apolo")
     return False
 
-
 # ============================
 # LOOP PRINCIPAL
 # ============================
 FAST_INTERVAL = 10
 REFRESH_INTERVAL = 30 * 60
 
-
 if __name__ == "__main__":
     logger.info("=== Iniciando Goomer-Apolo Sync ===")
+    logger.info("IP local detectado: " + LOCAL_IP)
+    logger.info("BASE em uso: " + BASE)
 
-    # Seleciona credenciais separadas para ORDERS e TABLES
     user_orders, pwd_orders, headers_orders = select_credential_for(orders_url, CRED_ORDERS, "ORDERS")
     user_tables, pwd_tables, headers_tables = select_credential_for(tables_url, CRED_TABLES, "TABLES")
 
