@@ -25,22 +25,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================
-# IP LOCAL + BASE LOCAL
+# IP DINÂMICO (A.B.C) + D=100
 # ============================
-def get_local_ip():
+def get_goomer_ip_same_net_d100():
+    """
+    Pega o IP de origem da máquina (A.B.C.Dlocal)
+    e retorna A.B.C.100 (D fixo = 100).
+    Ex: src 10.10.69.75 -> goomer 10.10.69.100
+    """
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
+        src_ip = s.getsockname()[0]
     finally:
         s.close()
-    return ip
 
-LOCAL_IP = get_local_ip()
-LOCAL_BASE = "http://" + LOCAL_IP + ":8081"
+    octetos = src_ip.split(".")
+    goomer_ip = f"{octetos[0]}.{octetos[1]}.{octetos[2]}.100"
+    return goomer_ip
 
-# BASE do Goomer: usa env se tiver, senão cai na LOCAL_BASE
-BASE = LOCAL_BASE
+GOOMER_IP = get_goomer_ip_same_net_d100()
+GOOMER_PORT = 8081
+BASE = f"http://{GOOMER_IP}:{GOOMER_PORT}"
 
 LOGIN_URL = BASE + "/api/v2/login"
 ORDERS_URL = BASE + "/api/v2/orders"
@@ -66,8 +72,8 @@ SESSION = requests.Session()
 
 def goomer_login():
     """
-    Faz POST em /api/v2/login com Basic Auth (GOOMER_USER/GOOMER_PASS)
-    e guarda cookies na SESSION global.
+    POST em /api/v2/login com Basic Auth (GOOMER_USER/GOOMER_PASS)
+    guarda cookies na SESSION.
     """
     logger.info(
         "Fazendo login no Goomer em " + LOGIN_URL +
@@ -213,7 +219,6 @@ def get_cash_tabs(last_hours):
         verify=False,
         timeout=30,
     )
-    # se ainda der 401 aqui, loga e sobe
     if r.status_code == 401:
         logger.error("401 em /tables mesmo com Authorization Basic; body=" + r.text)
     r.raise_for_status()
@@ -302,8 +307,8 @@ FAST_INTERVAL = 10
 REFRESH_INTERVAL = 30 * 60
 
 if __name__ == "__main__":
-    logger.info("=== Iniciando Goomer-Apolo Sync (sessão + Basic em /tables) ===")
-    logger.info("IP local detectado: " + LOCAL_IP)
+    logger.info("=== Iniciando Goomer-Apolo Sync (host dinâmico A.B.C.100) ===")
+    logger.info("GOOMER_IP: " + GOOMER_IP)
     logger.info("BASE em uso: " + BASE)
     logger.info("ORDERS_URL: " + ORDERS_URL)
     logger.info("TABLES_URL: " + TABLES_URL)
