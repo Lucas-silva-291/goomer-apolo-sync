@@ -424,13 +424,14 @@ if __name__ == "__main__":
 
     ORDERS_USER, ORDERS_PASS = select_credential_for(ORDERS_URL, cred_orders, "ORDERS")
 
-    # Fallback para TABLES se não houver Operador
+# Fallback para TABLES se não houver Operador
     if not cred_tables:
-        logger.warning("Nenhum candidato TABLES; usando mesma credencial de ORDERS com senha fixa '1'")
+        logger.warning("Nenhum candidato TABLES; usando mesma credencial de ORDERS")
         TABLES_USER = ORDERS_USER
-        TABLES_PASS = "1"
+        TABLES_PASS = ORDERS_PASS
     else:
         TABLES_USER, TABLES_PASS = select_credential_for(TABLES_URL, cred_tables, "TABLES")
+
 
     logger.info("Selecionado ORDERS_USER=" + ORDERS_USER)
     logger.info("Selecionado TABLES_USER=" + TABLES_USER)
