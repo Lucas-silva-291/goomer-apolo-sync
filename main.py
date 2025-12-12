@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 def get_local_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        # não precisa estar acessível, é só pra descobrir a interface de saída
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
     finally:
@@ -58,9 +57,9 @@ tables_url = BASE + "/api/v2/tables"
 # ============================
 def load_creds_from_local_users():
     """
-    Busca /api/v2/users no Goomer local e monta listas de credenciais
-    para ORDERS e TABLES com base em username/password.
+    Busca /api/v2/users no Goomer local e monta listas de credenciais.
     """
+    users = []
     try:
         logger.info("Buscando usuários em " + USERS_URL)
         headers = {
@@ -71,10 +70,9 @@ def load_creds_from_local_users():
         r = requests.get(USERS_URL, headers=headers, verify=False, timeout=10)
         r.raise_for_status()
         data = r.json()
-        users = data["response"]["users"]
+        users = data.get("response", {}).get("users", [])
     except Exception as e:
         logger.error("Falha ao buscar usuários locais: " + str(e))
-        users = []
 
     cred_orders = []
     cred_tables = []
@@ -85,14 +83,11 @@ def load_creds_from_local_users():
         if not username or not password:
             continue
 
-        # aqui você define a lógica de separação:
-        # exemplo: tudo vai pra ORDERS
+        # regra simples: usa todos em ambos
         cred_orders.append({"user": username, "pwd": password})
-        # se quiser, pode separar por tipo
-        # if u.get("type") == "Garcom":
-        #     cred_tables.append({"user": username, "pwd": password})
+        cred_tables.append({"user": username, "pwd": password})
 
-    if not cred_orders:
+    if not cred_orders and not cred_tables:
         # fallback para env se não achar nada
         logger.warning("Nenhum usuário local carregado; usando variáveis de ambiente")
         GOOMER_USERS_ORDERS = os.environ.get(
@@ -107,8 +102,20 @@ def load_creds_from_local_users():
 
     return cred_orders, cred_tables
 
-# carrega as credenciais na inicialização
-CRED_ORDERS, CRED_TABLES = load_creds_from_local_users()
+# carrega usuários locais / env
+cred_orders, cred_tables = load_creds_from_local_users()
+
+# garante que ambos tenham algo, usando mesma lista se precisar
+if not cred_orders and not cred_tables:
+    raise Exception("Nenhuma credencial encontrada (nem local nem env)!")
+
+if not cred_orders:
+    cred_orders = cred_tables
+if not cred_tables:
+    cred_tables = cred_orders
+
+CRED_ORDERS = cred_orders
+CRED_TABLES = cred_tables
 
 # ============================
 # FUNÇÕES DE DATA/HORA
@@ -163,6 +170,7 @@ def select_credential_for(url, cred_list, desc):
                 verify=False,
                 timeout=15
             )
+            logger.info(desc + " status=" + str(r.status_code))
             r.raise_for_status()
             logger.info("API autorizou " + desc + " com usuário: " + user)
             return user, pwd, headers
