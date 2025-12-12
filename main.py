@@ -53,19 +53,25 @@ API_KEY = os.environ["APOLO_API_KEY"]
 GOOMER_BRANCH = os.environ["GOOMER_BRANCH"]
 
 # ============================
+# CREDENCIAIS GOOMER (ÚNICAS)
+# ============================
+GOOMER_USER = os.environ.get("GOOMER_USER", "caixa")
+GOOMER_PASS = os.environ.get("GOOMER_PASS", "1234")
+
+# ============================
 # SESSÃO AUTENTICADA NO GOOMER
 # ============================
 SESSION = requests.Session()
 
 def goomer_login():
     """
-    Faz um POST em /api/v2/login com Basic Auth (user/senha fixos ou de env)
+    Faz um POST em /api/v2/login com Basic Auth (GOOMER_USER/GOOMER_PASS)
     e guarda cookies na SESSION global.
     """
-    username = os.environ.get("GOOMER_USER", "caixa")
-    password = os.environ.get("GOOMER_PASS", "1234")
-
-    logger.info("Fazendo login no Goomer em " + LOGIN_URL + " com usuário " + username)
+    logger.info(
+        "Fazendo login no Goomer em " + LOGIN_URL +
+        " com usuário " + GOOMER_USER
+    )
 
     headers = {
         "Accept": "*/*",
@@ -74,11 +80,10 @@ def goomer_login():
         "X-Requested-With": "XMLHttpRequest",
     }
 
-    # Requests monta o header Authorization: Basic ... para nós
     resp = SESSION.post(
         LOGIN_URL,
         headers=headers,
-        auth=(username, password),
+        auth=(GOOMER_USER, GOOMER_PASS),
         verify=False,
         timeout=10,
     )
@@ -116,7 +121,7 @@ def pending_to_brasilia(pending_list):
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
 
 # ============================
-# REQUISIÇÕES COM RETRY (USANDO SESSION)
+# REQUISIÇÕES COM RETRY (SESSION + AUTH)
 # ============================
 def session_request_with_retry(method, url, headers=None, params=None, max_retries=3):
     for tentativa in range(max_retries):
@@ -126,12 +131,12 @@ def session_request_with_retry(method, url, headers=None, params=None, max_retri
                 url,
                 headers=headers,
                 params=params,
+                auth=(GOOMER_USER, GOOMER_PASS),
                 verify=False,
                 timeout=30
             )
             if r.status_code == 401 and tentativa == 0:
-                # tenta relogar uma vez se perdeu a sessão
-                logger.warning("401 recebido; refazendo login no Goomer")
+                logger.warning("401 recebido em " + url + "; refazendo login no Goomer")
                 goomer_login()
                 continue
 
@@ -278,9 +283,11 @@ FAST_INTERVAL = 10
 REFRESH_INTERVAL = 30 * 60
 
 if __name__ == "__main__":
-    logger.info("=== Iniciando Goomer-Apolo Sync (sessão única) ===")
+    logger.info("=== Iniciando Goomer-Apolo Sync (sessão + Basic Auth) ===")
     logger.info("IP local detectado: " + LOCAL_IP)
     logger.info("BASE em uso: " + BASE)
+    logger.info("ORDERS_URL: " + ORDERS_URL)
+    logger.info("TABLES_URL: " + TABLES_URL)
 
     # login inicial
     goomer_login()
