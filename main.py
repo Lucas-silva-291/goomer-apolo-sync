@@ -56,8 +56,8 @@ TABLES_URL = BASE + "/api/v2/tables"
 # CONFIG APOLO
 # ============================
 API_BASE = "https://api.apolocontrol.com"
-API_KEY = os.environ["APOLO_API_KEY"]
-GOOMER_BRANCH = os.environ["GOOMER_BRANCH"]
+API_KEY = os.environ.get("APOLO_API_KEY")
+GOOMER_BRANCH = os.environ.get("GOOMER_BRANCH")
 
 # ============================
 # CREDENCIAIS GOOMER (ÚNICAS)
@@ -307,6 +307,10 @@ FAST_INTERVAL = 10
 REFRESH_INTERVAL = 30 * 60
 
 if __name__ == "__main__":
+    
+    if not API_KEY or not GOOMER_BRANCH:
+        raise Exception("APOLO_API_KEY ou GOOMER_BRANCH não definidos nas variáveis de ambiente")
+
     logger.info("=== Iniciando Goomer-Apolo Sync (host dinâmico A.B.C.100) ===")
     logger.info("GOOMER_IP: " + GOOMER_IP)
     logger.info("BASE em uso: " + BASE)
