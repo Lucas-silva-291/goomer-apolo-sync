@@ -55,6 +55,7 @@ BASE = "http://" + GOOMER_IP + ":" + str(GOOMER_PORT)
 LOGIN_URL = BASE + "/api/v2/login"
 ORDERS_URL = BASE + "/api/v2/orders"
 TABLES_URL = BASE + "/api/v2/tables"
+USERS_URL = BASE + "/api/v2/users"
 
 # ============================
 # CONFIG APOLO
@@ -64,24 +65,115 @@ API_KEY = os.environ.get("APOLO_API_KEY")
 GOOMER_BRANCH = os.environ.get("GOOMER_BRANCH")
 
 # ============================
-# CREDENCIAIS GOOMER (ÚNICAS)
-# ============================
-GOOMER_USER = os.environ.get("GOOMER_USER", "caixa")
-GOOMER_PASS = os.environ.get("GOOMER_PASS", "1234")
-
-# ============================
 # SESSÃO AUTENTICADA NO GOOMER
 # ============================
 SESSION = requests.Session()
 
+# estes serão preenchidos dinamicamente a partir de /users
+ORDERS_USER = None
+ORDERS_PASS = None
+TABLES_USER = None
+TABLES_PASS = None
+
+# ============================
+# CARREGAR USERS E ESCOLHER CREDS
+# ============================
+def load_creds_from_users_api():
+    """
+    Chama /api/v2/users e devolve:
+      - cred_orders: lista de dicts para ORDERS
+      - cred_tables: lista de dicts para TABLES
+
+    Regra:
+      - type contém "Caixa"     -> ORDERS
+      - type contém "Operador"  -> TABLES
+      - Se não achar nada, usa todos usuários em ambos.
+    """
+    headers = {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": BASE + "/goomer/login",
+    }
+
+    try:
+        logger.info("Buscando usuários em " + USERS_URL)
+        r = requests.get(USERS_URL, headers=headers, verify=False, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        users = data.get("response", {}).get("users", [])
+    except Exception as e:
+        logger.error("Falha ao buscar /api/v2/users: " + str(e))
+        users = []
+
+    cred_orders = []
+    cred_tables = []
+
+    for u in users:
+        username = u.get("username")
+        password = u.get("password")
+        utype = u.get("type", "")
+        if not username or not password:
+            continue
+
+        if "Caixa" in utype:
+            cred_orders.append({"user": username, "pwd": password})
+        if "Operador" in utype or "Garçom" in utype or "Garcom" in utype:
+            cred_tables.append({"user": username, "pwd": password})
+
+    if not cred_orders and not cred_tables:
+        logger.warning("Nenhuma credencial classificada; usando todos usuários em ORDERS e TABLES")
+        for u in users:
+            username = u.get("username")
+            password = u.get("password")
+            if not username or not password:
+                continue
+            cred_orders.append({"user": username, "pwd": password})
+            cred_tables.append({"user": username, "pwd": password})
+
+    return cred_orders, cred_tables
+
+def select_credential_for(url, cred_list, desc):
+    """
+    Testa cada credencial em um endpoint específico.
+    Retorna (user, pwd) da primeira que der HTTP 200.
+    """
+    headers = {
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": BASE,
+        "Referer": BASE + "/goomer/login",
+        "Accept": "application/json",
+    }
+    for cred in cred_list:
+        user = cred["user"]
+        pwd = cred["pwd"]
+        try:
+            logger.info("Testando credencial para " + desc + ": " + user)
+            r = requests.get(
+                url,
+                params={"last_hours": 0.5},
+                auth=(user, pwd),
+                headers=headers,
+                verify=False,
+                timeout=10
+            )
+            r.raise_for_status()
+            logger.info("API autorizou " + desc + " com usuário: " + user)
+            return user, pwd
+        except Exception as e:
+            logger.warning("API rejeitou " + desc + " com " + user + ": " + str(e))
+    raise Exception("Nenhuma credencial funcionou para " + desc + "!")
+
+# ============================
+# LOGIN (USA ORDERS_USER)
+# ============================
 def goomer_login():
     """
-    POST em /api/v2/login com Basic Auth (GOOMER_USER/GOOMER_PASS)
+    POST em /api/v2/login com ORDERS_USER/ORDERS_PASS
     guarda cookies na SESSION.
     """
     logger.info(
         "Fazendo login no Goomer em " + LOGIN_URL +
-        " com usuário " + GOOMER_USER
+        " com usuário " + ORDERS_USER
     )
 
     headers = {
@@ -94,7 +186,7 @@ def goomer_login():
     resp = SESSION.post(
         LOGIN_URL,
         headers=headers,
-        auth=(GOOMER_USER, GOOMER_PASS),
+        auth=(ORDERS_USER, ORDERS_PASS),
         verify=False,
         timeout=10,
     )
@@ -134,7 +226,7 @@ def pending_to_brasilia(pending_list):
 # ============================
 # REQUISIÇÕES COM RETRY (SESSION)
 # ============================
-def session_request_with_retry(method, url, headers=None, params=None, max_retries=3):
+def session_request_with_retry(method, url, headers=None, params=None, auth=None, max_retries=3):
     for tentativa in range(max_retries):
         try:
             r = SESSION.request(
@@ -142,10 +234,11 @@ def session_request_with_retry(method, url, headers=None, params=None, max_retri
                 url,
                 headers=headers,
                 params=params,
+                auth=auth,
                 verify=False,
                 timeout=30
             )
-            if r.status_code == 401 and tentativa == 0:
+            if r.status_code == 401 and tentativa == 0 and auth is not None:
                 logger.warning("401 recebido em " + url + "; refazendo login no Goomer")
                 goomer_login()
                 continue
@@ -196,22 +289,27 @@ def get_orders(last_hours):
         "Origin": BASE,
         "Referer": BASE + "/goomer/login",
     }
-    r = session_request_with_retry("GET", ORDERS_URL, headers=headers, params=params)
+    r = session_request_with_retry(
+        "GET",
+        ORDERS_URL,
+        headers=headers,
+        params=params,
+        auth=(ORDERS_USER, ORDERS_PASS)
+    )
     data = r.json()
     return data["response"]["orders"]
 
 def get_cash_tabs(last_hours):
     params = {"last_hours": last_hours}
 
-    # monta "user:pass" sem f-string
-    raw = (GOOMER_USER + ":" + GOOMER_PASS).encode()
+    raw = (TABLES_USER + ":" + TABLES_PASS).encode()
     token = base64.b64encode(raw).decode()
 
     headers = {
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json",
         "Origin": BASE,
-        "Referer": BASE + "/goomer/login",
+        "Referer": BASE + "/goomer/mapa/mesas",
         "Authorization": "Basic " + token,
     }
 
@@ -223,7 +321,7 @@ def get_cash_tabs(last_hours):
         timeout=30,
     )
     if r.status_code == 401:
-        logger.error("401 em /tables mesmo com Authorization Basic; body=" + r.text)
+        logger.error("401 em /tables com usuário " + TABLES_USER + "; body=" + r.text)
     r.raise_for_status()
 
     data = r.json()
@@ -314,13 +412,24 @@ if __name__ == "__main__":
     if not API_KEY or not GOOMER_BRANCH:
         raise Exception("APOLO_API_KEY ou GOOMER_BRANCH não definidos nas variáveis de ambiente")
 
-    logger.info("=== Iniciando Goomer-Apolo Sync (host dinâmico A.B.C.100) ===")
+    logger.info("=== Iniciando Goomer-Apolo Sync (host dinâmico A.B.C.100 + cred dinâmicas) ===")
     logger.info("GOOMER_IP: " + GOOMER_IP)
     logger.info("BASE em uso: " + BASE)
     logger.info("ORDERS_URL: " + ORDERS_URL)
     logger.info("TABLES_URL: " + TABLES_URL)
 
-    # login inicial
+    # 1) Carrega usuarios da API e escolhe credenciais
+    cred_orders, cred_tables = load_creds_from_users_api()
+    logger.info("Candidatos ORDERS: " + str([c["user"] for c in cred_orders]))
+    logger.info("Candidatos TABLES: " + str([c["user"] for c in cred_tables]))
+
+    ORDERS_USER, ORDERS_PASS = select_credential_for(ORDERS_URL, cred_orders, "ORDERS")
+    TABLES_USER, TABLES_PASS = select_credential_for(TABLES_URL, cred_tables, "TABLES")
+
+    logger.info("Selecionado ORDERS_USER=" + ORDERS_USER)
+    logger.info("Selecionado TABLES_USER=" + TABLES_USER)
+
+    # 2) login inicial com ORDERS_USER
     goomer_login()
 
     last_refresh = 0
