@@ -7,6 +7,7 @@ import logging
 import socket
 import base64
 from urllib3.exceptions import InsecureRequestWarning
+from http.client import HTTPConnection  # py3
 
 # desabilita warning de verify=False
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
@@ -21,6 +22,17 @@ logging.basicConfig(
         logging.StreamHandler(),
     ]
 )
+
+# DEBUG detalhado do urllib3 / requests
+log = logging.getLogger("urllib3")
+log.setLevel(logging.DEBUG)
+
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+log.addHandler(ch)
+
+HTTPConnection.debuglevel = 1
+
 logger = logging.getLogger(__name__)
 
 # ============================
@@ -46,6 +58,7 @@ def get_goomer_ip_same_net_d100():
         octetos[2] + ".100"
     )
     return goomer_ip
+
 
 GOOMER_IP = get_goomer_ip_same_net_d100()
 GOOMER_PORT = 8081
@@ -131,6 +144,7 @@ def load_creds_from_users_api():
 
     return cred_orders, cred_tables
 
+
 def select_credential_for(url, cred_list, desc):
     """
     Testa cada credencial em um endpoint específico.
@@ -162,6 +176,7 @@ def select_credential_for(url, cred_list, desc):
             logger.warning("API rejeitou " + desc + " com " + user + ": " + str(e))
     raise Exception("Nenhuma credencial funcionou para " + desc + "!")
 
+
 # ============================
 # LOGIN (USA ORDERS_USER)
 # ============================
@@ -192,11 +207,13 @@ def goomer_login():
     resp.raise_for_status()
     logger.info("Login Goomer OK, status=" + str(resp.status_code))
 
+
 # ============================
 # FUNÇÕES DE DATA/HORA
 # ============================
 def utc_to_brasilia(dt_utc):
     return dt_utc - timedelta(hours=3)
+
 
 def parse_iso_utc(ts):
     ts = ts.split("Z")[0]
@@ -206,10 +223,12 @@ def parse_iso_utc(ts):
         ts = ts.split(".", 1)[0]
     return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
 
+
 def to_brasilia_time(utc_iso_str):
     dt_utc = parse_iso_utc(utc_iso_str)
     dt_brt = utc_to_brasilia(dt_utc)
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
+
 
 def pending_to_brasilia(pending_list):
     if not pending_list:
@@ -221,6 +240,7 @@ def pending_to_brasilia(pending_list):
     dt_utc = parse_iso_utc(ts)
     dt_brt = utc_to_brasilia(dt_utc)
     return dt_brt.strftime("%Y-%m-%d %H:%M:%S")
+
 
 # ============================
 # REQUISIÇÕES COM RETRY (SESSION)
@@ -255,6 +275,7 @@ def session_request_with_retry(method, url, headers=None, params=None, auth=None
                 time.sleep(sleep_time)
     raise Exception("Falha após " + str(max_retries) + " tentativas em " + url)
 
+
 # ============================
 # CÁLCULO DE JANELA DE BUSCA
 # ============================
@@ -277,6 +298,7 @@ def calculate_last_hours():
 
     return 1
 
+
 # ============================
 # BUSCAS NO GOOMER (ORDERS / TABLES)
 # ============================
@@ -297,6 +319,7 @@ def get_orders(last_hours):
     )
     data = r.json()
     return data["response"]["orders"]
+
 
 def get_cash_tabs(last_hours):
     params = {"last_hours": last_hours}
@@ -327,6 +350,7 @@ def get_cash_tabs(last_hours):
     tables = data["response"].get("tables", [])
     return {t["code"] for t in tables}
 
+
 def simplify_orders(orders, cash_codes):
     simplified = []
     for o in orders:
@@ -356,6 +380,7 @@ def simplify_orders(orders, cash_codes):
         }
         simplified.append(item)
     return simplified
+
 
 # ============================
 # ENVIO PARA API APOLO
@@ -400,17 +425,20 @@ def send_to_api(pedidos):
     logger.error("Falha após 3 tentativas na API Apolo")
     return False
 
+
 def send_heartbeat():
     url = API_BASE + "/api/goomer/heartbeat"
     headers = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
     payload = {"cod_branch": GOOMER_BRANCH}
     requests.post(url, json=payload, headers=headers, timeout=10)
-    
+
+
 # ============================
 # LOOP PRINCIPAL
 # ============================
 FAST_INTERVAL = 10
 REFRESH_INTERVAL = 30 * 60
+
 
 if __name__ == "__main__":
 
@@ -430,14 +458,13 @@ if __name__ == "__main__":
 
     ORDERS_USER, ORDERS_PASS = select_credential_for(ORDERS_URL, cred_orders, "ORDERS")
 
-# Fallback para TABLES se não houver Operador
+    # Fallback para TABLES se não houver Operador
     if not cred_tables:
         logger.warning("Nenhum candidato TABLES; usando mesma credencial de ORDERS")
         TABLES_USER = ORDERS_USER
         TABLES_PASS = ORDERS_PASS
     else:
         TABLES_USER, TABLES_PASS = select_credential_for(TABLES_URL, cred_tables, "TABLES")
-
 
     logger.info("Selecionado ORDERS_USER=" + ORDERS_USER)
     logger.info("Selecionado TABLES_USER=" + TABLES_USER)
@@ -484,8 +511,8 @@ if __name__ == "__main__":
                         logger.info("Payload REFRESH atualizado")
 
                 last_refresh = now
+
             send_heartbeat()
-            
             erro_count = 0
 
         except Exception as e:
