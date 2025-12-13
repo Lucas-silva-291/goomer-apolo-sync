@@ -60,7 +60,7 @@ def get_goomer_ip_same_net_d100():
     return goomer_ip
 
 
-GOOMER_IP = get_goomer_ip_same_net_d100()
+GOOMER_IP = os.environ.get("GOOMER_IP") or get_goomer_ip_same_net_d100()
 GOOMER_PORT = 8081
 BASE = "http://" + GOOMER_IP + ":" + str(GOOMER_PORT)
 
