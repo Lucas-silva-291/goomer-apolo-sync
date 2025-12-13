@@ -400,6 +400,12 @@ def send_to_api(pedidos):
     logger.error("Falha após 3 tentativas na API Apolo")
     return False
 
+def send_heartbeat():
+    url = API_BASE + "/api/goomer/heartbeat"
+    headers = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
+    payload = {"cod_branch": GOOMER_BRANCH}
+    requests.post(url, json=payload, headers=headers, timeout=10)
+    
 # ============================
 # LOOP PRINCIPAL
 # ============================
@@ -478,7 +484,8 @@ if __name__ == "__main__":
                         logger.info("Payload REFRESH atualizado")
 
                 last_refresh = now
-
+            send_heartbeat()
+            
             erro_count = 0
 
         except Exception as e:
