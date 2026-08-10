@@ -8,6 +8,12 @@ import socket
 import base64
 from urllib3.exceptions import InsecureRequestWarning
 from http.client import HTTPConnection  # py3
+from dotenv import load_dotenv
+
+from extract_pedidos import processar_pedidos_produtos
+
+# Carrega variáveis do arquivo .env
+load_dotenv()
 
 # desabilita warning de verify=False
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
@@ -23,15 +29,13 @@ logging.basicConfig(
     ]
 )
 
-# DEBUG detalhado do urllib3 / requests
+# Reduz verbosidade do urllib3
 log = logging.getLogger("urllib3")
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.WARNING)
 
 ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
+ch.setLevel(logging.WARNING)
 log.addHandler(ch)
-
-HTTPConnection.debuglevel = 1
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +64,14 @@ def get_goomer_ip_same_net_d100():
     return goomer_ip
 
 
-GOOMER_IP = os.environ.get("GOOMER_IP") or get_goomer_ip_same_net_d100()
-GOOMER_PORT = 8081
-BASE = "http://" + GOOMER_IP + ":" + str(GOOMER_PORT)
+# Tenta usar GOOMER_BASE_URL do .env, senão calcula IP dinamicamente
+BASE = os.environ.get("GOOMER_BASE_URL")
+if not BASE:
+    GOOMER_IP = os.environ.get("GOOMER_IP") or get_goomer_ip_same_net_d100()
+    GOOMER_PORT = 8081
+    BASE = "http://" + GOOMER_IP + ":" + str(GOOMER_PORT)
+else:
+    GOOMER_IP = BASE.replace("http://", "").replace("https://", "").split(":")[0]
 
 LOGIN_URL = BASE + "/api/v2/login"
 ORDERS_URL = BASE + "/api/v2/orders"
@@ -75,6 +84,7 @@ USERS_URL = BASE + "/api/v2/users"
 API_BASE = "https://api.apolocontrol.com"
 API_KEY = os.environ.get("APOLO_API_KEY")
 GOOMER_BRANCH = os.environ.get("GOOMER_BRANCH")
+PRODUTOS_ENDPOINT = API_BASE + "/api/goomer/pedidos-produtos"
 
 # ============================
 # SESSÃO AUTENTICADA NO GOOMER
@@ -426,11 +436,16 @@ def send_to_api(pedidos):
     return False
 
 
-def send_heartbeat():
-    url = API_BASE + "/api/goomer/heartbeat"
-    headers = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
-    payload = {"cod_branch": GOOMER_BRANCH}
-    requests.post(url, json=payload, headers=headers, timeout=10)
+def save_orders_json(orders, filename="pedidos_full.json"):
+    """
+    Salva os pedidos completos (full/brutos) em um arquivo JSON silenciosamente
+    """
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(orders, f, ensure_ascii=False, indent=2)
+        logger.debug("JSON salvo: " + filename + " (" + str(len(orders)) + " itens)")
+    except Exception as e:
+        logger.error("Erro ao salvar JSON " + filename + ": " + str(e))
 
 
 # ============================
@@ -490,11 +505,23 @@ if __name__ == "__main__":
             if last_hours > 0:
                 logger.debug("[FAST Ciclo " + str(ciclo_count) + "] Buscando últimos " + str(last_hours) + "h")
                 orders = get_orders(last_hours)
+                save_orders_json(orders, "pedidos_full.json")
                 cash_codes = get_cash_tabs(last_hours)
                 simplified_orders = simplify_orders(orders, cash_codes)
 
                 if simplified_orders and simplified_orders != last_fast_payload:
                     logger.info("NOVOS pedidos detectados (" + str(len(simplified_orders)) + " itens)")
+                    try:
+                        processar_pedidos_produtos(
+                            orders,
+                            "pedidos.json",
+                            enviar=True,
+                            salvar_local=False,
+                            api_url=PRODUTOS_ENDPOINT,
+                            api_key=API_KEY,
+                        )
+                    except Exception as prod_err:
+                        logger.error("Falha ao enviar produtos detalhados: %s", prod_err)
                     if send_to_api(simplified_orders):
                         last_fast_payload = simplified_orders
                         logger.info("Payload FAST atualizado com sucesso")
@@ -502,6 +529,18 @@ if __name__ == "__main__":
             if now - last_refresh >= REFRESH_INTERVAL:
                 logger.info("[REFRESH] Atualizando status dos últimos 12h...")
                 orders_big = get_orders(12)
+                save_orders_json(orders_big, "pedidos_full_refresh.json")
+                try:
+                    processar_pedidos_produtos(
+                        orders_big,
+                        "pedidos.json",
+                        enviar=True,
+                        salvar_local=False,
+                        api_url=PRODUTOS_ENDPOINT,
+                        api_key=API_KEY,
+                    )
+                except Exception as prod_err:
+                    logger.error("Falha ao enviar produtos detalhados (refresh): %s", prod_err)
                 cash_codes_big = get_cash_tabs(12)
                 simplified_big = simplify_orders(orders_big, cash_codes_big)
 
@@ -512,7 +551,6 @@ if __name__ == "__main__":
 
                 last_refresh = now
 
-            send_heartbeat()
             erro_count = 0
 
         except Exception as e:
